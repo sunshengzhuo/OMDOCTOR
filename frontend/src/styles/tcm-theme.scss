@@ -1,0 +1,100 @@
+/* 中医诊所管理平台 — 全局主题 */
+
+:root {
+  --tcm-primary: #8B4513;        /* 深褐色 — 中药色调 */
+  --tcm-primary-light: #A0522D;
+  --tcm-primary-dark: #6B3410;
+  --tcm-accent: #D4A574;         /* 暖金色 */
+  --tcm-bg: #F5F0EB;             /* 暖灰背景 */
+  --tcm-sidebar-bg: #2C1810;     /* 深褐侧边栏 */
+  --tcm-sidebar-text: #E8D5C4;
+  --tcm-sidebar-active: #D4A574;
+  --tcm-success: #52C41A;
+  --tcm-warning: #FAAD14;
+  --tcm-danger: #F5222D;
+  --tcm-info: #1890FF;
+}
+
+/* 覆盖 Element Plus 主题色 */
+:root {
+  --el-color-primary: #8B4513;
+  --el-color-primary-light-3: #A0522D;
+  --el-color-primary-light-5: #B8784A;
+  --el-color-primary-light-7: #CFA07A;
+  --el-color-primary-light-9: #E8CDB5;
+  --el-color-primary-dark-2: #6B3410;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #app {
+  height: 100%;
+  font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
+  background-color: var(--tcm-bg);
+}
+
+/* 适老化：基础字号偏大 */
+body {
+  font-size: 15px;
+  color: #333;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c0b4a8;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 中医特色标签样式 */
+.tcm-tag-yang {
+  color: #1890FF;
+  border-color: #1890FF;
+}
+
+.tcm-tag-yin {
+  color: #F5222D;
+  border-color: #F5222D;
+}
+
+.tcm-tag-qi {
+  color: #FAAD14;
+  border-color: #FAAD14;
+}
+
+.tcm-tag-blood {
+  color: #722ED1;
+  border-color: #722ED1;
+}
+
+.tcm-tag-damp {
+  color: #13C2C2;
+  border-color: #13C2C2;
+}
+
+/* 配伍禁忌警告样式 */
+.incompatibility-warning {
+  background-color: #FFF2F0;
+  border: 1px solid #FFCCC7;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 8px 0;
+}
+
+.incompatibility-warning .el-icon {
+  color: #F5222D;
+  font-size: 20px;
+}

@@ -1,0 +1,52 @@
+appId: com.tcm.doctor
+productName: 中医诊所管理平台
+copyright: Copyright © 2024
+
+directories:
+  output: dist-electron
+  buildResources: resources
+
+files:
+  - electron/dist/**/*
+  - frontend/dist/**/*
+  - backend/dist/tcm-backend.exe
+  - backend/tcm_doctor.db
+  - package.json
+
+extraResources:
+  - from: backend/dist/tcm-backend.exe
+    to: backend/tcm-backend.exe
+  - from: backend/app/data
+    to: backend/data
+    filter:
+      - "**/*.json"
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: resources/icon.ico
+  requestedExecutionLevel: asInvoker
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  installerIcon: resources/icon.ico
+  uninstallerIcon: resources/icon.ico
+  installerHeaderIcon: resources/icon.ico
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: 中医诊所管理平台
+  artifactName: ${name}-setup-${version}.${ext}
+
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  category: public.app-category.medical
+
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+  category: MedicalSoftware

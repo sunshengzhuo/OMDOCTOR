@@ -1,0 +1,23 @@
+{
+  "name": "tcm-doctor",
+  "version": "0.1.0",
+  "description": "中医诊所问诊管理平台 - 集成DeepSeek智能辨证",
+  "private": true,
+  "main": "electron/dist/main.js",
+  "scripts": {
+    "dev:backend": "cd backend && python -m uvicorn app.main:app --reload --port 8765",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:electron": "cd electron && npx tsc && cd .. && npx electron . --dev",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "build:frontend": "cd frontend && npm run build",
+    "build:backend": "cd backend && pyinstaller build.spec",
+    "build:electron": "npx electron-builder",
+    "build": "npm run build:frontend && npm run build:backend && npm run build:electron"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.0",
+    "typescript": "^5.9.3"
+  }
+}
