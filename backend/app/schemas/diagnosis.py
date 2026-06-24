@@ -1,4 +1,5 @@
 """智能问诊相关 Pydantic 模型"""
+from datetime import datetime
 from pydantic import BaseModel, Field
 
 
@@ -46,3 +47,60 @@ class DiagnosisAnalyzeResponse(BaseModel):
     recommended_formulas: list[dict] = Field(default_factory=list, description="推荐方剂")
     safety_warnings: list[str] = Field(default_factory=list, description="安全警告")
     references: list[str] = Field(default_factory=list, description="参考出处")
+
+
+# ── 会话管理 ──
+
+class ConversationCreate(BaseModel):
+    title: str | None = Field(None, description="对话标题")
+    patient_id: int | None = Field(None, description="关联患者ID")
+
+
+class ConversationUpdate(BaseModel):
+    title: str | None = Field(None, description="新标题")
+
+
+class ConversationSummary(BaseModel):
+    """侧边栏对话摘要"""
+    uuid: str
+    title: str | None
+    message_count: int
+    last_message_at: datetime | None
+    created_at: datetime
+    model_config = {"from_attributes": True}
+
+
+class ConversationResponse(BaseModel):
+    """对话详情"""
+    uuid: str
+    title: str | None
+    patient_id: int | None
+    message_count: int
+    last_message_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+    model_config = {"from_attributes": True}
+
+
+class ConversationListResponse(BaseModel):
+    total: int
+    items: list[ConversationSummary]
+    page: int
+    page_size: int
+
+
+class MessageResponse(BaseModel):
+    """消息"""
+    id: int
+    seq: int
+    role: str
+    content: str
+    images: list | None = None
+    warnings: list | None = None
+    created_at: datetime
+    model_config = {"from_attributes": True}
+
+
+class MessageListResponse(BaseModel):
+    total: int
+    items: list[MessageResponse]

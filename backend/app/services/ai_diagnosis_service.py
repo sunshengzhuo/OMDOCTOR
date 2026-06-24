@@ -2,6 +2,7 @@
 import json
 import uuid
 from datetime import datetime
+from typing import AsyncGenerator
 
 import httpx
 from sqlalchemy.orm import Session
@@ -42,8 +43,64 @@ TCM_SYSTEM_PROMPT = """你是一位经验丰富的中医师，精通中医理论
 class DiagnosisService:
     """AI智能辨证服务"""
 
-    def __init__(self):
-        self.conversation_history: dict[str, list[dict]] = {}
+    # ── DB 辅助 ──
+
+    def _get_or_create_conversation(self, conversation_id: str | None, db: Session, patient_id: int | None = None):
+        """按 uuid 查找或新建 Conversation 行，返回 (ConvORM, uuid_str)"""
+        from app.models.conversation import Conversation
+        if conversation_id:
+            conv = db.query(Conversation).filter(Conversation.uuid == conversation_id).first()
+            if conv:
+                return conv, conversation_id
+        # 新建
+        new_uuid = conversation_id or str(uuid.uuid4())
+        conv = Conversation(uuid=new_uuid, patient_id=patient_id)
+        db.add(conv)
+        db.commit()
+        db.refresh(conv)
+        return conv, new_uuid
+
+    def _build_messages_from_db(self, conv, db: Session, limit: int = 40) -> list[dict]:
+        """从 DB 读取历史消息，构建 DeepSeek API 格式"""
+        from app.models.conversation import Message
+        db_msgs = db.query(Message).filter(
+            Message.conversation_id == conv.id
+        ).order_by(Message.seq.desc()).limit(limit).all()
+        db_msgs.reverse()
+
+        result = []
+        for m in db_msgs:
+            if m.images:
+                # 多模态消息：还原为 content_parts
+                content_parts: list[dict] = [{"type": "text", "text": m.content}]
+                for img in m.images:
+                    if isinstance(img, dict) and "url" in img:
+                        content_parts.append({"type": "image_url", "image_url": {"url": img["url"]}})
+                    elif isinstance(img, str):
+                        content_parts.append({"type": "image_url", "image_url": {"url": img}})
+                result.append({"role": m.role, "content": content_parts})
+            else:
+                result.append({"role": m.role, "content": m.content})
+        return result
+
+    def _save_message(self, conv, seq: int, role: str, content: str, db: Session,
+                      images: list | None = None, warnings: list | None = None):
+        """写入一条 Message 并更新 Conversation 冗余字段"""
+        from app.models.conversation import Message
+        msg = Message(
+            conversation_id=conv.id,
+            seq=seq,
+            role=role,
+            content=content,
+            images=images,
+            warnings=warnings,
+        )
+        db.add(msg)
+        conv.message_count = (conv.message_count or 0) + 1
+        conv.last_message_at = datetime.now()
+        db.commit()
+
+    # ── 非流式 chat（保留兼容） ──
 
     async def chat(
         self,
@@ -62,45 +119,36 @@ class DiagnosisService:
                 "safety_warnings": [],
             }
 
-        # 初始化或延续对话
-        conv_id = conversation_id or str(uuid.uuid4())
-        if conv_id not in self.conversation_history:
-            self.conversation_history[conv_id] = []
+        conv, conv_id = self._get_or_create_conversation(conversation_id, db, patient_id)
 
-        # RAG: 检索相关知识
+        # 首次消息自动设标题
+        if not conv.title and message:
+            conv.title = message[:50] + ("..." if len(message) > 50 else "")
+            db.commit()
+
+        # RAG
         context = ""
         if db:
             context = await self._retrieve_context(message, db)
 
-        # 构建消息
-        messages = [{"role": "system", "content": TCM_SYSTEM_PROMPT}]
+        # 构建 API 消息
+        api_messages = [{"role": "system", "content": TCM_SYSTEM_PROMPT}]
         if context:
-            messages.append({
-                "role": "system",
-                "content": f"参考以下中医知识库内容：\n\n{context}"
-            })
-        messages.extend(self.conversation_history[conv_id])
-
-        # 构建用户消息（支持多模态）
+            api_messages.append({"role": "system", "content": f"参考以下中医知识库内容：\n\n{context}"})
+        api_messages.extend(self._build_messages_from_db(conv, db))
         user_msg = self._build_user_message(message, images)
-        messages.append(user_msg)
+        api_messages.append(user_msg)
 
-        # 调用 DeepSeek API
+        # 调用 API
         has_images = bool(images)
-        reply = await self._call_deepseek(messages, use_vision=has_images)
-
-        # 安全性硬约束校验
+        reply = await self._call_deepseek(api_messages, use_vision=has_images)
         safety_warnings = self._check_safety_in_reply(reply, db)
 
-        # 更新对话历史（只存文字，图片太大不存）
-        self.conversation_history[conv_id].append({"role": "user", "content": message})
-        if images:
-            self.conversation_history[conv_id][-1]["content"] += " [附图]"
-        self.conversation_history[conv_id].append({"role": "assistant", "content": reply})
-
-        # 保持历史不超过20轮
-        if len(self.conversation_history[conv_id]) > 40:
-            self.conversation_history[conv_id] = self.conversation_history[conv_id][-40:]
+        # 持久化消息
+        next_seq = (conv.message_count or 0) + 1
+        img_data = [{"url": u} for u in images] if images else None
+        self._save_message(conv, next_seq, "user", message, db, images=img_data)
+        self._save_message(conv, next_seq + 1, "assistant", reply, db, warnings=safety_warnings)
 
         return {
             "conversation_id": conv_id,
@@ -206,6 +254,90 @@ class DiagnosisService:
             "references": [],
         }
 
+    async def analyze_stream(
+        self,
+        observation: str | None = None,
+        auscultation: str | None = None,
+        inquiry: str | None = None,
+        palpation: str | None = None,
+        tongue_body: str | None = None,
+        tongue_coat: str | None = None,
+        pulse: str | None = None,
+        chief_complaint: str | None = None,
+        patient_gender: str | None = None,
+        is_pregnant: bool | None = None,
+        tongue_image: str | None = None,
+        face_image: str | None = None,
+        lab_report_images: list[str] | None = None,
+        db: Session | None = None,
+    ) -> AsyncGenerator[str, None]:
+        """流式四诊辨证分析"""
+        if not settings.deepseek_api_key:
+            yield f"data: {json.dumps({'type': 'error', 'content': '⚠️ DeepSeek API Key 未配置'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        four_diag = []
+        if chief_complaint:
+            four_diag.append(f"【主诉】{chief_complaint}")
+        if observation:
+            four_diag.append(f"【望诊】{observation}")
+        if auscultation:
+            four_diag.append(f"【闻诊】{auscultation}")
+        if inquiry:
+            four_diag.append(f"【问诊】{inquiry}")
+        if palpation:
+            four_diag.append(f"【切诊】{palpation}")
+        if tongue_body or tongue_coat:
+            four_diag.append(f"【舌象】舌质{tongue_body or '未记录'}，舌苔{tongue_coat or '未记录'}")
+        if pulse:
+            four_diag.append(f"【脉象】{pulse}")
+
+        patient_info = ""
+        if patient_gender:
+            patient_info += f"患者性别：{patient_gender}。"
+        if is_pregnant:
+            patient_info += "⚠️患者为孕妇，需注意孕妇禁忌。"
+
+        user_message = f"请根据以下四诊信息进行辨证分析：\n\n{patient_info}\n" + "\n".join(four_diag)
+        user_message += "\n\n请给出：1.病机分析 2.中医病名 3.证型 4.治法 5.推荐方剂及加减 6.调护建议"
+
+        context = ""
+        search_query = chief_complaint or " ".join(filter(None, [observation, inquiry, pulse]))
+        if db and search_query:
+            context = await self._retrieve_context(search_query, db)
+
+        messages = [{"role": "system", "content": TCM_SYSTEM_PROMPT}]
+        if context:
+            messages.append({"role": "system", "content": f"参考以下中医知识库内容：\n\n{context}"})
+
+        content_parts: list[dict] = [{"type": "text", "text": user_message}]
+        if tongue_image:
+            content_parts.append({"type": "text", "text": "【舌象照片】请仔细观察以下舌象照片："})
+            content_parts.append({"type": "image_url", "image_url": {"url": tongue_image}})
+        if face_image:
+            content_parts.append({"type": "text", "text": "【面色照片】请观察以下面色照片："})
+            content_parts.append({"type": "image_url", "image_url": {"url": face_image}})
+        if lab_report_images:
+            content_parts.append({"type": "text", "text": "【化验单/影像报告】请解读以下检查报告："})
+            for img in lab_report_images:
+                content_parts.append({"type": "image_url", "image_url": {"url": img}})
+
+        if len(content_parts) > 1:
+            messages.append({"role": "user", "content": content_parts})
+        else:
+            messages.append({"role": "user", "content": user_message})
+
+        has_images = bool(tongue_image or face_image or lab_report_images)
+        full_reply = ""
+        async for chunk in self._call_deepseek_stream(messages, use_vision=has_images):
+            full_reply += chunk
+            yield f"data: {json.dumps({'type': 'content', 'content': chunk}, ensure_ascii=False)}\n\n"
+
+        safety_warnings = self._check_safety_in_reply(full_reply, db)
+        yield f"data: {json.dumps({'type': 'warnings', 'warnings': safety_warnings}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
     def _build_user_message(self, message: str, images: list[str] | None = None) -> dict:
         """构建用户消息，支持多模态（文字+图片）"""
         if not images:
@@ -271,7 +403,7 @@ class DiagnosisService:
             api_key = settings.deepseek_api_key
 
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
                 response = await client.post(
                     f"{base_url}/v1/chat/completions",
                     headers={
@@ -282,7 +414,7 @@ class DiagnosisService:
                         "model": model,
                         "messages": messages,
                         "temperature": 0.7,
-                        "max_tokens": 2000,
+                        "max_tokens": 4000,
                     },
                 )
                 response.raise_for_status()
@@ -299,6 +431,125 @@ class DiagnosisService:
             return f"⚠️ API 调用失败 (HTTP {e.response.status_code}): {detail}"
         except Exception as e:
             return f"⚠️ 请求出错: {str(e)}"
+
+    async def _call_deepseek_stream(self, messages: list[dict], use_vision: bool = False) -> AsyncGenerator[str, None]:
+        """流式调用 DeepSeek API，逐块 yield 文本内容"""
+        vision_model = settings.deepseek_vision_model
+        vision_base_url = settings.deepseek_vision_base_url or settings.deepseek_base_url
+        vision_api_key = settings.deepseek_vision_api_key or settings.deepseek_api_key
+
+        if use_vision and not vision_model:
+            messages = self._strip_images(messages)
+
+        if use_vision and vision_model:
+            model = vision_model
+            base_url = vision_base_url
+            api_key = vision_api_key
+        else:
+            model = settings.deepseek_model
+            base_url = settings.deepseek_base_url
+            api_key = settings.deepseek_api_key
+
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
+                async with client.stream(
+                    "POST",
+                    f"{base_url}/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": messages,
+                        "temperature": 0.7,
+                        "max_tokens": 4000,
+                        "stream": True,
+                    },
+                ) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                yield content
+                        except json.JSONDecodeError:
+                            continue
+        except httpx.TimeoutException:
+            yield "⚠️ 请求超时，请稍后重试。"
+        except httpx.HTTPStatusError as e:
+            detail = ""
+            try:
+                detail = e.response.json().get("error", {}).get("message", "") or str(e.response.status_code)
+            except Exception:
+                detail = str(e.response.status_code)
+            yield f"⚠️ API 调用失败 (HTTP {e.response.status_code}): {detail}"
+        except Exception as e:
+            yield f"⚠️ 请求出错: {str(e)}"
+
+    async def chat_stream(
+        self,
+        message: str,
+        images: list[str] | None = None,
+        conversation_id: str | None = None,
+        patient_id: int | None = None,
+        visit_id: int | None = None,
+        db: Session | None = None,
+    ) -> AsyncGenerator[str, None]:
+        """流式对话式智能问诊"""
+        if not settings.deepseek_api_key:
+            yield f"data: {json.dumps({'type': 'error', 'content': '⚠️ DeepSeek API Key 未配置'}, ensure_ascii=False)}\n\n"
+            return
+
+        conv, conv_id = self._get_or_create_conversation(conversation_id, db, patient_id)
+
+        # 首次消息自动设标题
+        if not conv.title and message:
+            conv.title = message[:50] + ("..." if len(message) > 50 else "")
+            db.commit()
+
+        # 发送 conversation_id
+        yield f"data: {json.dumps({'type': 'meta', 'conversation_id': conv_id}, ensure_ascii=False)}\n\n"
+
+        # RAG
+        context = ""
+        if db:
+            context = await self._retrieve_context(message, db)
+
+        # 构建 API 消息
+        api_messages = [{"role": "system", "content": TCM_SYSTEM_PROMPT}]
+        if context:
+            api_messages.append({"role": "system", "content": f"参考以下中医知识库内容：\n\n{context}"})
+        api_messages.extend(self._build_messages_from_db(conv, db))
+        user_msg = self._build_user_message(message, images)
+        api_messages.append(user_msg)
+
+        # 流式调用
+        has_images = bool(images)
+        full_reply = ""
+        async for chunk in self._call_deepseek_stream(api_messages, use_vision=has_images):
+            full_reply += chunk
+            yield f"data: {json.dumps({'type': 'content', 'content': chunk}, ensure_ascii=False)}\n\n"
+
+        # 安全性校验
+        safety_warnings = self._check_safety_in_reply(full_reply, db)
+
+        # 持久化消息
+        next_seq = (conv.message_count or 0) + 1
+        img_data = [{"url": u} for u in images] if images else None
+        self._save_message(conv, next_seq, "user", message, db, images=img_data)
+        self._save_message(conv, next_seq + 1, "assistant", full_reply, db, warnings=safety_warnings)
+
+        # 发送安全警告 + 结束标记
+        yield f"data: {json.dumps({'type': 'warnings', 'warnings': safety_warnings}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
 
     def _strip_images(self, messages: list[dict]) -> list[dict]:
         """将多模态消息中的图片剥离，保留文字描述（降级到纯文字模型时使用）"""
