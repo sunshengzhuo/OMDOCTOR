@@ -9,13 +9,13 @@ directories:
 files:
   - electron/dist/**/*
   - frontend/dist/**/*
-  - backend/dist/tcm-backend.exe
-  - backend/tcm_doctor.db
   - package.json
 
 extraResources:
   - from: backend/dist/tcm-backend.exe
     to: backend/tcm-backend.exe
+  - from: backend/tcm_doctor.db
+    to: backend/tcm_doctor.db
   - from: backend/app/data
     to: backend/data
     filter:
