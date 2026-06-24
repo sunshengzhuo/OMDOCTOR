@@ -360,8 +360,8 @@ function selectFormula(formula: any) {
   form.value.classic_formula_id = formula.id
   form.value.items = []
 
-  if (formula.composition?.herbs) {
-    for (const h of formula.composition.herbs) {
+  const herbs = Array.isArray(formula.composition) ? formula.composition : formula.composition?.herbs || []
+  for (const h of herbs) {
       // 需要通过药名查找 herb_id
       const matchedHerb = herbCacheList.value.find((herb: any) => herb.name === h.herb)
       form.value.items.push({
@@ -373,7 +373,6 @@ function selectFormula(formula: any) {
         note: h.note || '',
         _warnings: [],
       })
-    }
   }
 
   if (formula.usage) {
