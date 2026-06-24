@@ -20,7 +20,11 @@ const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}`
 async function createWindow() {
   // 启动 FastAPI 后端
   console.log('[Main] Starting FastAPI backend...')
-  await startPythonBackend(BACKEND_PORT)
+  try {
+    await startPythonBackend(BACKEND_PORT)
+  } catch (err) {
+    console.error('[Main] Backend failed to start, continuing without it:', err)
+  }
 
   // 创建浏览器窗口
   mainWindow = new BrowserWindow({
@@ -46,7 +50,9 @@ async function createWindow() {
     mainWindow.webContents.openDevTools()
   } else {
     // 生产模式：加载构建后的静态文件
-    const frontendPath = path.join(__dirname, '../frontend/dist/index.html')
+    // asar 内结构: /electron/dist/main.js, /frontend/dist/index.html
+    // __dirname = /electron/dist/，需要 ../../ 到根再进 frontend/dist/
+    const frontendPath = path.join(__dirname, '../../frontend/dist/index.html')
     console.log(`[Main] Loading frontend from: ${frontendPath}`)
     await mainWindow.loadFile(frontendPath)
   }

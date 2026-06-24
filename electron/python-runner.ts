@@ -9,6 +9,7 @@
 import { spawn, ChildProcess } from 'child_process'
 import * as http from 'http'
 import * as path from 'path'
+import { app } from 'electron'
 
 let backendProcess: ChildProcess | null = null
 
@@ -18,7 +19,7 @@ let backendProcess: ChildProcess | null = null
  * 生产模式: PyInstaller 打包的 exe
  */
 function getPythonCommand(): { cmd: string; args: string[] } {
-  const isPackaged = __dirname.includes('app.asar')
+  const isPackaged = app.isPackaged
 
   if (isPackaged) {
     // 生产模式：运行打包后的 exe
@@ -76,7 +77,7 @@ function waitForBackend(port: number, maxRetries = 20, interval = 500): Promise<
  */
 export async function startPythonBackend(port: number): Promise<void> {
   const { cmd, args } = getPythonCommand()
-  const isPackaged = __dirname.includes('app.asar')
+  const isPackaged = app.isPackaged
 
   console.log(`[PythonRunner] Starting: ${cmd} ${args.join(' ')}`)
 
@@ -87,7 +88,8 @@ export async function startPythonBackend(port: number): Promise<void> {
 
   // 开发模式下设置 cwd 为 backend 目录；打包模式由 run.py 自行处理 CWD
   if (!isPackaged) {
-    spawnOptions.cwd = path.resolve(__dirname, '..', 'backend')
+    // __dirname = electron/dist/，需要上两层到项目根目录再进 backend
+    spawnOptions.cwd = path.resolve(__dirname, '..', '..', 'backend')
     console.log(`[PythonRunner] Working dir: ${spawnOptions.cwd}`)
   }
 
