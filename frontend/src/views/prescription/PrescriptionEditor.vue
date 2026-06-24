@@ -18,7 +18,9 @@
         <el-row :gutter="16">
           <el-col :span="8">
             <el-form-item label="患者" required>
-              <el-select v-model="form.patient_id" filterable placeholder="选择患者" style="width:100%"
+              <el-select v-model="form.patient_id" filterable remote reserve-keyword
+                placeholder="输入姓名或电话搜索" style="width:100%"
+                :remote-method="searchPatients" :loading="patientsLoading"
                 @change="onPatientChange">
                 <el-option v-for="p in patients" :key="p.id" :label="p.name" :value="p.id">
                   <span>{{ p.name }}</span>
@@ -195,6 +197,7 @@ import IncompatibilityAlert from '@/components/IncompatibilityAlert.vue'
 const router = useRouter()
 const submitting = ref(false)
 const patients = ref<any[]>([])
+const patientsLoading = ref(false)
 const classicFormulas = ref<any[]>([])
 const formulaDialogVisible = ref(false)
 const formulaSearch = ref('')
@@ -427,10 +430,24 @@ async function doSubmit() {
 
 // ── 数据加载 ──
 async function loadPatients() {
+  patientsLoading.value = true
   try {
-    const res = await api.get('/patients', { params: { page_size: 200 } }) as any
+    const res = await api.get('/patients', { params: { page_size: 100 } }) as any
     patients.value = res.items || res || []
-  } catch {}
+  } catch {} finally {
+    patientsLoading.value = false
+  }
+}
+
+async function searchPatients(query: string) {
+  if (!query) { loadPatients(); return }
+  patientsLoading.value = true
+  try {
+    const res = await api.get('/patients', { params: { search: query, page_size: 50 } }) as any
+    patients.value = res.items || res || []
+  } catch {} finally {
+    patientsLoading.value = false
+  }
 }
 
 async function loadFormulas() {
